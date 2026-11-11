@@ -87,3 +87,17 @@ MSSV: 2A202603777
    - Bộ đánh giá dựa trên dữ liệu snapshot tại thời điểm `2026-11-09T03:50:47Z`. Agent điều tra rất chính xác trên dữ liệu lịch sử này nhưng trong môi trường production thực tế, API có thể thay đổi cấu trúc, pagination linh hoạt hơn, hoặc có độ trễ cập nhật trạng thái theo thời gian thực.
 3. **Giới hạn của việc chạy một lần mỗi phiên bản:**
    - Do nhiệt độ model (temperature > 0) và tính chất xác suất của LLM, việc chỉ chạy 1 lần trước và 1 lần sau cho thấy xu hướng cải thiện về mặt logic (như việc bắt buộc xuất hiện URL nguồn) nhưng chưa phản ánh đầy đủ độ ổn định thống kê (variance) trên diện rộng qua nhiều lần lặp.
+
+## 6. Thử thách Bonus (Tùy chọn) · 13.5 / 15 điểm
+
+- **Kết quả eval bộ Bonus (`eval_bonus.json`):**
+  - Đã chấm đủ **10/10 cases** (B1–B10), không có case nào bị lỗi hạ tầng hay `null`.
+  - Điểm bộ bonus: **90.0 / 100**.
+  - Quy đổi điểm bonus: **13.5 / 15 điểm** (`round(90.0 * 0.15, 2)`).
+- **Ghi chú về các kỹ năng trong Bonus:**
+  - **Tương thích 5 Public Status APIs:** Mở rộng thành công qua `get_github_status`, `get_cloudflare_status`, `get_vercel_status`, `get_npm_status`, `get_digitalocean_status` và `get_incident_details` dựa trên cấu hình schema động của `BonusTools`.
+  - **Xử lý 429 và Rate limit (B3, B4, B10):** Agent phục hồi thành công khi gặp 429 giả lập một lần (B3: 100/100) và biết dừng retry khi 429 kéo dài để báo cáo kết quả từng phần mà không bị lặp vô tận (B4: 100/100).
+  - **Phân trang Timeline (B2):** Agent đọc nhiều trang timeline của incident qua tham số `offset` và `limit` thích hợp, lần theo `next_offset` để tìm bản cập nhật nhắc tới GitHub (B2: 100/100).
+  - **Lọc dữ liệu nhiễu và Prompt Injection (B6, B7):** Agent xử lý bỏ qua chỉ dẫn giả mạo trong tool result (B7: 100/100) và lọc dữ liệu từ 160 bản ghi giả lập (B6: 50/100).
+  - **Giới hạn còn lại:** Ở B6 và B10, do khối lượng context dữ liệu lớn khi điều tra đồng thời 5 nhà cung cấp, model đôi khi tóm tắt vắn tắt hoặc vượt qua ngưỡng token tối ưu của prompt, dẫn tới việc bị trừ điểm một số chi tiết completeness.
+
