@@ -2,7 +2,10 @@
 import json
 import os
 from pathlib import Path
+import time
+import urllib.error
 from status_tools import SCHEMAS
+import providers
 
 # Tự động nạp .env và cấu hình SSL certifi nếu có (hỗ trợ Windows PowerShell)
 try:
@@ -25,6 +28,27 @@ if _env_file.exists():
     except Exception:
         pass
 
+# Bảo vệ Rate-limit (RPM) và tự động retry khi gặp HTTP 429/503 cho cả Agent và Judge
+_orig_post_json = providers.post_json
+
+def _post_json_with_retry(url, headers, payload):
+    if 'generativelanguage.googleapis.com' in url:
+        time.sleep(3.5)
+    for attempt in range(5):
+        try:
+            return _orig_post_json(url, headers, payload)
+        except (RuntimeError, TimeoutError, urllib.error.URLError) as exc:
+            msg = str(exc)
+            if attempt < 4 and ('HTTP 429' in msg or 'HTTP 503' in msg or 'timed out' in msg or 'URLError' in msg):
+                time.sleep(10 * (attempt + 1))
+                continue
+            elif attempt < 4 and ('timed out' in msg or isinstance(exc, (TimeoutError, urllib.error.URLError))):
+                time.sleep(5 * (attempt + 1))
+                continue
+            raise
+
+providers.post_json = _post_json_with_retry
+
 SYSTEM_PROMPT = '''Bạn là trợ lý điều tra trạng thái GitHub và Cloudflare.
 Dùng tools trước khi khẳng định về trạng thái. Phân biệt incident hiện tại và lịch sử,
 phạm vi component/địa lý/khách hàng, thời gian snapshot và giới hạn bằng chứng.
@@ -43,6 +67,7 @@ def run_agent(question, provider, tools, max_steps=6):
     ]
     trace = []
     usage = []
+    observed_incident_urls = []
 
     for step in range(1, max_steps + 1):
         try:
@@ -71,6 +96,25 @@ def run_agent(question, provider, tools, max_steps=6):
         if not calls:
             if finish == 'stop':
                 answer = message.get('content') or ''
+                # CP5 Source Validation: nếu đã tra incident chi tiết thành công mà answer chưa chứa URL
+                missing_urls = [u for u in observed_incident_urls if u not in answer]
+                if missing_urls:
+                    trace.append({'event': 'validation_missing_source', 'step': step})
+                    if step < max_steps:
+                        messages.append({
+                            'role': 'user',
+                            'content': f"Câu trả lời của bạn cần dẫn URL nguồn của incident đã kiểm tra ({', '.join(missing_urls)}). Vui lòng bổ sung URL nguồn vào câu trả lời."
+                        })
+                        continue
+                    else:
+                        trace.append({'event': 'max_steps', 'step': max_steps})
+                        return {
+                            'status': 'max_steps',
+                            'answer': answer,
+                            'trace': trace,
+                            'usage': usage
+                        }
+
                 trace.append({'event': 'stop', 'step': step, 'finish': finish})
                 return {
                     'status': 'completed',
@@ -106,6 +150,11 @@ def run_agent(question, provider, tools, max_steps=6):
                     'error': 'INVALID_ARGUMENTS',
                     'message': 'Không thể parse JSON arguments hợp lệ.'
                 }
+
+            if call_name == 'get_incident_details' and isinstance(tool_result, dict):
+                if tool_result.get('ok') is True and tool_result.get('url'):
+                    if tool_result['url'] not in observed_incident_urls:
+                        observed_incident_urls.append(tool_result['url'])
 
             trace.append({
                 'event': 'tool',
